@@ -8,60 +8,82 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 
+	// Import statements
+	"github.com/golang-jwt/jwt"
 	"github.com/gorilla/mux"
 	_ "github.com/lib/pq"
+	"golang.org/x/crypto/bcrypt"
 )
 
-// DB connection global (for simplicity)
-var db *sql.DB
+// Global variables
+var (
+	jwtSecret []byte
+	db        *sql.DB
+)
 
-// User represents a user in the system
+// --------------------------
+//        Data Models
+// --------------------------
+
+// User: plaintext username, bcrypt-hashed password
 type User struct {
-	ID       int    `json:"id"`
-	Username string `json:"username"`
-	Password string `json:"password"`
+	ID          int    `json:"id"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	Permissions string `json:"permissions"`
 }
 
-// Budget represents a budgeting record (including period and user_id)
+// Budget: belongs to a user
 type Budget struct {
 	ID          int     `json:"id"`
 	Name        string  `json:"name"`
 	Amount      float64 `json:"amount"`
 	Description string  `json:"description"`
-	Period      string  `json:"period"`  // e.g., daily, weekly, monthly, yearly, or custom
-	UserID      int     `json:"user_id"` // foreign key to users table
+	Period      string  `json:"period"`
+	UserID      int     `json:"user_id"`
 }
 
-// Charge represents a charge record
+// Charge: belongs to a user
 type Charge struct {
 	ID         int     `json:"id"`
-	Name       string  `json:"name"` // quick description
+	Name       string  `json:"name"`
 	Amount     float64 `json:"amount"`
-	ChargeType string  `json:"charge_type"` // "subscription" or "one-time"
-	Periodical string  `json:"periodical"`  // daily, weekly, monthly, yearly, or custom (if subscription)
-	UserID     int     `json:"user_id"`     // foreign key to users table
-	CreatedAt  string  `json:"created_at"`  // timestamp string for example purposes
+	ChargeType string  `json:"charge_type"`
+	Periodical string  `json:"periodical"`
+	UserID     int     `json:"user_id"`
+	CreatedAt  string  `json:"created_at"`
 }
 
-// BankAccount represents a bank account record
-type BankAccount struct {
-	ID        int    `json:"id"`
-	Nickname  string `json:"nickname"`   // friendly name for the account
-	Bank      string `json:"bank"`       // bank name
-	API       string `json:"api"`        // API key/endpoint to auto-fetch charges
-	UserID    int    `json:"user_id"`    // foreign key to users table
-	CreatedAt string `json:"created_at"` // timestamp string for example purposes
+// Share: user_id shares something with user_share_id
+type Share struct {
+	ID          int    `json:"id"`
+	UserID      int    `json:"user_id"`
+	UserShareID int    `json:"user_share_id"`
+	Access      string `json:"access"`
+}
+
+// --------------------------
+//  Initialization
+// --------------------------
+
+func init() {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		log.Fatal("JWT_SECRET environment variable not set")
+	}
+	jwtSecret = []byte(secret)
 }
 
 func main() {
-	// --- 1. Connect to PostgreSQL ---
 	var err error
 
-	// Use environment variables or hard-coded (for demo)
-	// Example: POSTGRES_URI="postgres://user:password@localhost:5432/budgetdb?sslmode=disable"
+	// Connect to PostgreSQL
 	dbURI := os.Getenv("POSTGRES_URI")
 	if dbURI == "" {
+		// Default (change as needed)
 		dbURI = "postgres://admin:admin@localhost:5432/budgetdb?sslmode=disable"
 	}
 
@@ -71,287 +93,792 @@ func main() {
 	}
 	defer db.Close()
 
-	// Check if the connection is alive
 	if err = db.Ping(); err != nil {
 		log.Fatalf("Error connecting to database: %v\n", err)
 	}
-
 	log.Println("Connected to PostgreSQL!")
 
-	// --- 2. Initialize Database Tables ---
-	err = initDB(db)
-	if err != nil {
+	// Create tables if needed
+	if err := initDB(db); err != nil {
 		log.Fatalf("Failed to initialize DB: %v\n", err)
 	}
 
-	// --- 3. Create default admin user if not exists ---
-	err = createDefaultAdmin(db)
-	if err != nil {
+	// Create default admin user if not exists
+	if err := createDefaultAdmin(db); err != nil {
 		log.Fatalf("Failed to create default admin: %v\n", err)
 	}
 
-	// --- 4. Set up Routes ---
+	// --------------------------
+	//         ROUTES
+	// --------------------------
 	r := mux.NewRouter()
 
-	// budgetsHandler: GET to list budgets, POST to add a new budget
-	r.HandleFunc("/api/budgets", budgetsHandler).Methods("GET", "POST")
+	// Users (admin-only)
+	r.HandleFunc("/api/users", createUserHandler).Methods("POST")
+	r.HandleFunc("/api/users/{id}", updateUserHandler).Methods("PUT")
+	r.HandleFunc("/api/users/{id}", deleteUserHandler).Methods("DELETE")
 
-	// budgetHandler: PUT to update and DELETE to remove a budget by id
-	r.HandleFunc("/api/budgets/{id}", budgetHandler).Methods("PUT", "DELETE")
-
+	// Login
 	r.HandleFunc("/api/login", loginHandler).Methods("POST")
-	// Additional endpoints for charges and bank accounts can be added similarly
 
-	// Serve static files (frontend) from the "public" folder
+	// Budgets
+	r.HandleFunc("/api/budgets", getBudgetsHandler).Methods("GET")
+	r.HandleFunc("/api/budgets", createBudgetHandler).Methods("POST")
+	r.HandleFunc("/api/budgets/{id}", updateBudgetHandler).Methods("PUT")
+	r.HandleFunc("/api/budgets/{id}", deleteBudgetHandler).Methods("DELETE")
+
+	// Charges
+	r.HandleFunc("/api/charges", getChargesHandler).Methods("GET")
+	r.HandleFunc("/api/charges", createChargeHandler).Methods("POST")
+	r.HandleFunc("/api/charges/{id}", updateChargeHandler).Methods("PUT")
+	r.HandleFunc("/api/charges/{id}", deleteChargeHandler).Methods("DELETE")
+
+	// Shares
+	r.HandleFunc("/api/shares", getSharesHandler).Methods("GET")
+	r.HandleFunc("/api/shares", createShareHandler).Methods("POST")
+	r.HandleFunc("/api/shares/{id}", deleteShareHandler).Methods("DELETE")
+
+	// Serve static files (optional front-end)
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir("./public")))
 
-	// --- 5. Start the server ---
 	log.Println("Server starting on port 8080...")
 	log.Fatal(http.ListenAndServe(":8080", r))
 }
 
-// initDB creates tables if they do not exist
+// --------------------------
+//   Database Initialization
+// --------------------------
+
 func initDB(db *sql.DB) error {
-	// Create users table
 	createUsersTable := `
     CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
-        username VARCHAR(50) UNIQUE NOT NULL,
-        password VARCHAR(100) NOT NULL
+        username VARCHAR(255) UNIQUE NOT NULL, 
+        password VARCHAR(255) NOT NULL,         
+        permissions VARCHAR(50) NOT NULL DEFAULT 'user'
     );
     `
-
-	// Create budgets table with new columns: period and user_id
 	createBudgetsTable := `
     CREATE TABLE IF NOT EXISTS budgets (
         id SERIAL PRIMARY KEY,
         name VARCHAR(100) NOT NULL,
         amount NUMERIC(10,2) NOT NULL,
         description TEXT,
-        period VARCHAR(20), -- daily, weekly, monthly, yearly, or custom
+        period VARCHAR(20),
         user_id INTEGER NOT NULL,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
     `
-
-	// Create charges table
 	createChargesTable := `
     CREATE TABLE IF NOT EXISTS charges (
         id SERIAL PRIMARY KEY,
         name VARCHAR(100) NOT NULL,
         amount NUMERIC(10,2) NOT NULL,
-        charge_type VARCHAR(50) NOT NULL, -- "subscription" or "one-time"
-        periodical VARCHAR(20),           -- daily, weekly, monthly, yearly, or custom
+        charge_type VARCHAR(50) NOT NULL,
+        periodical VARCHAR(20),
         user_id INTEGER NOT NULL,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
     `
-
-	// Create bank_accounts table
-	createBankAccountsTable := `
-    CREATE TABLE IF NOT EXISTS bank_accounts (
+	createSharesTable := `
+    CREATE TABLE IF NOT EXISTS shares (
         id SERIAL PRIMARY KEY,
-        nickname VARCHAR(100) NOT NULL,
-        bank VARCHAR(100) NOT NULL,
-        api TEXT,
         user_id INTEGER NOT NULL,
-        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        user_share_id INTEGER NOT NULL,
+        access TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_share_id) REFERENCES users(id) ON DELETE CASCADE
     );
     `
 
-	// Execute table creation queries; IF NOT EXISTS makes them no-ops if the table exists
-	_, err := db.Exec(createUsersTable)
-	if err != nil {
+	if _, err := db.Exec(createUsersTable); err != nil {
 		return fmt.Errorf("creating users table: %v", err)
 	}
-
-	_, err = db.Exec(createBudgetsTable)
-	if err != nil {
+	if _, err := db.Exec(createBudgetsTable); err != nil {
 		return fmt.Errorf("creating budgets table: %v", err)
 	}
-
-	_, err = db.Exec(createChargesTable)
-	if err != nil {
+	if _, err := db.Exec(createChargesTable); err != nil {
 		return fmt.Errorf("creating charges table: %v", err)
 	}
-
-	_, err = db.Exec(createBankAccountsTable)
-	if err != nil {
-		return fmt.Errorf("creating bank_accounts table: %v", err)
+	if _, err := db.Exec(createSharesTable); err != nil {
+		return fmt.Errorf("creating shares table: %v", err)
 	}
 
 	return nil
 }
 
-// createDefaultAdmin checks if an admin user exists, and only creates one if not
 func createDefaultAdmin(db *sql.DB) error {
 	var count int
-	err := db.QueryRow(`SELECT COUNT(*) FROM users WHERE username=$1`, "admin").Scan(&count)
+	err := db.QueryRow(`SELECT COUNT(*) FROM users WHERE permissions='admin'`).Scan(&count)
 	if err != nil {
 		return err
 	}
 
 	if count == 0 {
-		// In production, the password should be hashed instead of plain text
-		_, err := db.Exec(`INSERT INTO users (username, password) VALUES ($1, $2)`, "admin", "admin")
+		hashedPass, err := hashPassword("admin")
+		if err != nil {
+			return fmt.Errorf("hash admin password: %v", err)
+		}
+		_, err = db.Exec(`
+            INSERT INTO users (username, password, permissions)
+            VALUES ($1, $2, $3)
+        `, "admin", hashedPass, "admin")
 		if err != nil {
 			return fmt.Errorf("insert default admin: %v", err)
 		}
-		log.Println("Default admin created: admin / admin")
+		log.Println("Default admin created: username=admin / password=admin (permissions=admin)")
 	} else {
 		log.Println("Admin user already exists, skipping creation.")
 	}
 	return nil
 }
 
-// loginHandler - example login endpoint
+// --------------------------
+//    Password + JWT
+// --------------------------
+
+func hashPassword(plainPass string) (string, error) {
+	hashedBytes, err := bcrypt.GenerateFromPassword([]byte(plainPass), bcrypt.DefaultCost)
+	if err != nil {
+		return "", fmt.Errorf("bcrypt error: %v", err)
+	}
+	return string(hashedBytes), nil
+}
+
+func checkPasswordHash(plainPass, hashed string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hashed), []byte(plainPass))
+	return err == nil
+}
+
+func generateJWT(userID int) (string, error) {
+	claims := jwt.MapClaims{
+		"user_id": userID,
+		"exp":     time.Now().Add(24 * time.Hour).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(jwtSecret)
+}
+
+// getUserIDFromToken parses the JWT from the "Authorization: Bearer <token>" header
+// and returns the user_id claim. Returns an error if invalid or missing.
+func getUserIDFromToken(r *http.Request) (int, error) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		return 0, fmt.Errorf("no auth header")
+	}
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+		return 0, fmt.Errorf("invalid auth header format")
+	}
+	tokenString := parts[1]
+
+	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method")
+		}
+		return jwtSecret, nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("token parse error: %v", err)
+	}
+	if !token.Valid {
+		return 0, fmt.Errorf("invalid token")
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return 0, fmt.Errorf("invalid claims")
+	}
+	userIDFloat, ok := claims["user_id"].(float64)
+	if !ok {
+		return 0, fmt.Errorf("no user_id in token")
+	}
+	return int(userIDFloat), nil
+}
+
+// isAdmin checks if the requesting user is an admin.
+func isAdmin(r *http.Request) bool {
+	userID, err := getUserIDFromToken(r)
+	if err != nil {
+		return false
+	}
+	var permissions string
+	err = db.QueryRow(`SELECT permissions FROM users WHERE id=$1`, userID).Scan(&permissions)
+	if err != nil {
+		return false
+	}
+	return permissions == "admin"
+}
+
+// --------------------------
+//        User Handlers
+// --------------------------
+
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	var creds User
-	err := json.NewDecoder(r.Body).Decode(&creds)
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
 
-	// Check user in DB
 	var dbUser User
-	row := db.QueryRow(`SELECT id, username, password FROM users WHERE username=$1`, creds.Username)
-	err = row.Scan(&dbUser.ID, &dbUser.Username, &dbUser.Password)
+	err := db.QueryRow(`
+        SELECT id, username, password, permissions
+        FROM users
+        WHERE username=$1
+    `, creds.Username).Scan(&dbUser.ID, &dbUser.Username, &dbUser.Password, &dbUser.Permissions)
 	if err != nil {
-		http.Error(w, "User not found", http.StatusUnauthorized)
+		http.Error(w, "User not found or DB error", http.StatusUnauthorized)
 		return
 	}
 
-	// Compare password (in production, compare hashed passwords)
-	if dbUser.Password != creds.Password {
+	if !checkPasswordHash(creds.Password, dbUser.Password) {
 		http.Error(w, "Invalid password", http.StatusUnauthorized)
 		return
 	}
 
-	// Return success (in a real app, you might set a session or JWT)
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "login successful"})
-}
-
-// budgetsHandler handles GET and POST requests for budgets.
-func budgetsHandler(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case "GET":
-		// Retrieve all budgets
-		rows, err := db.Query("SELECT id, name, amount, description, period, user_id FROM budgets")
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Error querying budgets: %v", err), http.StatusInternalServerError)
-			return
-		}
-		defer rows.Close()
-
-		var budgets []Budget
-		for rows.Next() {
-			var b Budget
-			err := rows.Scan(&b.ID, &b.Name, &b.Amount, &b.Description, &b.Period, &b.UserID)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Error scanning budget: %v", err), http.StatusInternalServerError)
-				return
-			}
-			budgets = append(budgets, b)
-		}
-
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(budgets)
-
-	case "POST":
-		// Add a new budget
-		var b Budget
-		err := json.NewDecoder(r.Body).Decode(&b)
-		if err != nil {
-			http.Error(w, "Invalid request payload", http.StatusBadRequest)
-			return
-		}
-
-		// Insert the new budget record and return the new id
-		err = db.QueryRow(
-			"INSERT INTO budgets (name, amount, description, period, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING id",
-			b.Name, b.Amount, b.Description, b.Period, b.UserID,
-		).Scan(&b.ID)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Error inserting budget: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(b)
-
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
+	tokenString, err := generateJWT(dbUser.ID)
+	if err != nil {
+		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+		return
 	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":     "login successful",
+		"token":       tokenString,
+		"permissions": dbUser.Permissions,
+	})
 }
 
-// budgetHandler handles PUT (update) and DELETE requests for a specific budget.
-func budgetHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	idStr := vars["id"]
+// Admin-only: create user
+func createUserHandler(w http.ResponseWriter, r *http.Request) {
+	if !isAdmin(r) {
+		http.Error(w, "Forbidden - Admins only", http.StatusForbidden)
+		return
+	}
 
-	// Convert the id parameter to an integer.
-	budgetID, err := strconv.Atoi(idStr)
+	var newUser User
+	if err := json.NewDecoder(r.Body).Decode(&newUser); err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	hashedPass, err := hashPassword(newUser.Password)
+	if err != nil {
+		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+		return
+	}
+
+	err = db.QueryRow(`
+        INSERT INTO users (username, password, permissions)
+        VALUES ($1, $2, $3)
+        RETURNING id
+    `, newUser.Username, hashedPass, newUser.Permissions).Scan(&newUser.ID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error creating user: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(newUser)
+}
+
+// Admin-only: update user
+func updateUserHandler(w http.ResponseWriter, r *http.Request) {
+	if !isAdmin(r) {
+		http.Error(w, "Forbidden - Admins only", http.StatusForbidden)
+		return
+	}
+
+	vars := mux.Vars(r)
+	userIDStr := vars["id"]
+	userID, err := strconv.Atoi(userIDStr)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	var updatedUser User
+	if err := json.NewDecoder(r.Body).Decode(&updatedUser); err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	hashedPass, err := hashPassword(updatedUser.Password)
+	if err != nil {
+		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+		return
+	}
+
+	result, err := db.Exec(`
+        UPDATE users
+        SET username=$1,
+            password=$2,
+            permissions=$3
+        WHERE id=$4
+    `, updatedUser.Username, hashedPass, updatedUser.Permissions, userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error updating user: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error checking rows affected: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if rowsAffected == 0 {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "User updated successfully"})
+}
+
+// Admin-only: delete user
+func deleteUserHandler(w http.ResponseWriter, r *http.Request) {
+	if !isAdmin(r) {
+		http.Error(w, "Forbidden - Admins only", http.StatusForbidden)
+		return
+	}
+
+	vars := mux.Vars(r)
+	userIDStr := vars["id"]
+	userID, err := strconv.Atoi(userIDStr)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	result, err := db.Exec("DELETE FROM users WHERE id=$1", userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error deleting user: %v", err), http.StatusInternalServerError)
+		return
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error checking rows affected: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if rowsAffected == 0 {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "User deleted successfully"})
+}
+
+// --------------------------
+//   Budgets Handlers
+// --------------------------
+
+// GET /api/budgets => returns budgets belonging to the JWT user
+func getBudgetsHandler(w http.ResponseWriter, r *http.Request) {
+	userID, err := getUserIDFromToken(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	rows, err := db.Query(`
+		SELECT id, name, amount, description, period, user_id
+		FROM budgets
+		WHERE user_id=$1
+	`, userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error querying budgets: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var budgets []Budget
+	for rows.Next() {
+		var b Budget
+		if err := rows.Scan(&b.ID, &b.Name, &b.Amount, &b.Description, &b.Period, &b.UserID); err != nil {
+			http.Error(w, fmt.Sprintf("Error scanning budget: %v", err), http.StatusInternalServerError)
+			return
+		}
+		budgets = append(budgets, b)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(budgets)
+}
+
+// POST /api/budgets => create a new budget for the JWT user
+func createBudgetHandler(w http.ResponseWriter, r *http.Request) {
+	userID, err := getUserIDFromToken(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var b Budget
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	// Override the user_id from the token
+	b.UserID = userID
+
+	err = db.QueryRow(`
+		INSERT INTO budgets (name, amount, description, period, user_id)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id
+	`, b.Name, b.Amount, b.Description, b.Period, b.UserID).Scan(&b.ID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error inserting budget: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(b)
+}
+
+// PUT /api/budgets/{id} => update a budget that belongs to the JWT user
+func updateBudgetHandler(w http.ResponseWriter, r *http.Request) {
+	userID, err := getUserIDFromToken(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	budgetIDStr := vars["id"]
+	budgetID, err := strconv.Atoi(budgetIDStr)
 	if err != nil {
 		http.Error(w, "Invalid budget ID", http.StatusBadRequest)
 		return
 	}
 
-	switch r.Method {
-	case "PUT":
-		// Update an existing budget
-		var b Budget
-		err := json.NewDecoder(r.Body).Decode(&b)
-		if err != nil {
-			http.Error(w, "Invalid request payload", http.StatusBadRequest)
-			return
-		}
-
-		result, err := db.Exec(
-			"UPDATE budgets SET name=$1, amount=$2, description=$3, period=$4, user_id=$5 WHERE id=$6",
-			b.Name, b.Amount, b.Description, b.Period, b.UserID, budgetID,
-		)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Error updating budget: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		rowsAffected, err := result.RowsAffected()
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Error fetching update result: %v", err), http.StatusInternalServerError)
-			return
-		}
-		if rowsAffected == 0 {
-			http.Error(w, "Budget not found", http.StatusNotFound)
-			return
-		}
-
-		json.NewEncoder(w).Encode(map[string]string{"message": "Budget updated successfully"})
-
-	case "DELETE":
-		// Delete a budget
-		result, err := db.Exec("DELETE FROM budgets WHERE id=$1", budgetID)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Error deleting budget: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		rowsAffected, err := result.RowsAffected()
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Error fetching delete result: %v", err), http.StatusInternalServerError)
-			return
-		}
-		if rowsAffected == 0 {
-			http.Error(w, "Budget not found", http.StatusNotFound)
-			return
-		}
-
-		json.NewEncoder(w).Encode(map[string]string{"message": "Budget deleted successfully"})
-
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
+	var b Budget
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
 	}
+
+	// Only update if user_id matches the JWT user
+	result, err := db.Exec(`
+		UPDATE budgets
+		SET name=$1, amount=$2, description=$3, period=$4
+		WHERE id=$5 AND user_id=$6
+	`,
+		b.Name, b.Amount, b.Description, b.Period, budgetID, userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error updating budget: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "Budget not found or not owned by user", http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"message": "Budget updated successfully"})
+}
+
+// DELETE /api/budgets/{id} => delete a budget that belongs to the JWT user
+func deleteBudgetHandler(w http.ResponseWriter, r *http.Request) {
+	userID, err := getUserIDFromToken(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	budgetIDStr := vars["id"]
+	budgetID, err := strconv.Atoi(budgetIDStr)
+	if err != nil {
+		http.Error(w, "Invalid budget ID", http.StatusBadRequest)
+		return
+	}
+
+	result, err := db.Exec(`
+		DELETE FROM budgets
+		WHERE id=$1 AND user_id=$2
+	`, budgetID, userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error deleting budget: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "Budget not found or not owned by user", http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"message": "Budget deleted successfully"})
+}
+
+// --------------------------
+//    Charges Handlers
+// --------------------------
+
+// GET /api/charges => get all charges for the JWT user
+func getChargesHandler(w http.ResponseWriter, r *http.Request) {
+	userID, err := getUserIDFromToken(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	rows, err := db.Query(`
+        SELECT id, name, amount, charge_type, periodical, user_id, created_at
+        FROM charges
+        WHERE user_id=$1
+    `, userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error querying charges: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var charges []Charge
+	for rows.Next() {
+		var c Charge
+		if err := rows.Scan(&c.ID, &c.Name, &c.Amount, &c.ChargeType, &c.Periodical, &c.UserID, &c.CreatedAt); err != nil {
+			http.Error(w, fmt.Sprintf("Error scanning charge: %v", err), http.StatusInternalServerError)
+			return
+		}
+		charges = append(charges, c)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(charges)
+}
+
+// POST /api/charges => create a new charge for the JWT user
+func createChargeHandler(w http.ResponseWriter, r *http.Request) {
+	userID, err := getUserIDFromToken(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var c Charge
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	// Force user_id to the JWT user
+	c.UserID = userID
+
+	err = db.QueryRow(`
+        INSERT INTO charges (name, amount, charge_type, periodical, user_id)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, created_at
+    `, c.Name, c.Amount, c.ChargeType, c.Periodical, c.UserID).Scan(&c.ID, &c.CreatedAt)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error inserting charge: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(c)
+}
+
+// PUT /api/charges/{id} => update a charge that belongs to the JWT user
+func updateChargeHandler(w http.ResponseWriter, r *http.Request) {
+	userID, err := getUserIDFromToken(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	chargeIDStr := vars["id"]
+	chargeID, err := strconv.Atoi(chargeIDStr)
+	if err != nil {
+		http.Error(w, "Invalid charge ID", http.StatusBadRequest)
+		return
+	}
+
+	var c Charge
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	// Only update if charge belongs to user
+	result, err := db.Exec(`
+        UPDATE charges
+        SET name=$1, amount=$2, charge_type=$3, periodical=$4
+        WHERE id=$5 AND user_id=$6
+    `, c.Name, c.Amount, c.ChargeType, c.Periodical, chargeID, userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error updating charge: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "Charge not found or not owned by user", http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"message": "Charge updated successfully"})
+}
+
+// DELETE /api/charges/{id} => delete a charge that belongs to the JWT user
+func deleteChargeHandler(w http.ResponseWriter, r *http.Request) {
+	userID, err := getUserIDFromToken(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	chargeIDStr := vars["id"]
+	chargeID, err := strconv.Atoi(chargeIDStr)
+	if err != nil {
+		http.Error(w, "Invalid charge ID", http.StatusBadRequest)
+		return
+	}
+
+	result, err := db.Exec(`
+        DELETE FROM charges
+        WHERE id=$1 AND user_id=$2
+    `, chargeID, userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error deleting charge: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "Charge not found or not owned by user", http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"message": "Charge deleted successfully"})
+}
+
+// --------------------------
+//       Shares Handlers
+// --------------------------
+
+// GET /api/shares => return any shares where the JWT user is user_id OR user_share_id
+func getSharesHandler(w http.ResponseWriter, r *http.Request) {
+	userID, err := getUserIDFromToken(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	rows, err := db.Query(`
+        SELECT id, user_id, user_share_id, access
+        FROM shares
+        WHERE user_id=$1 OR user_share_id=$1
+    `, userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error fetching shares: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var shares []Share
+	for rows.Next() {
+		var s Share
+		if err := rows.Scan(&s.ID, &s.UserID, &s.UserShareID, &s.Access); err != nil {
+			http.Error(w, fmt.Sprintf("Error scanning share: %v", err), http.StatusInternalServerError)
+			return
+		}
+		shares = append(shares, s)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(shares)
+}
+
+// POST /api/shares => create a share
+// Request body might look like: { "shareUsername": "bob", "access": "read-only" }
+func createShareHandler(w http.ResponseWriter, r *http.Request) {
+	// 1. Get the user_id from JWT
+	userID, err := getUserIDFromToken(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// 2. Parse request
+	var requestBody struct {
+		ShareUsername string `json:"shareUsername"`
+		Access        string `json:"access"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	// 3. Look up the user_share_id by the given username
+	var userShareID int
+	err = db.QueryRow(`
+        SELECT id FROM users WHERE username=$1
+    `, requestBody.ShareUsername).Scan(&userShareID)
+	if err != nil {
+		http.Error(w, "No user found with that username", http.StatusNotFound)
+		return
+	}
+
+	// 4. Insert into 'shares' table
+	var newShare Share
+	newShare.UserID = userID
+	newShare.UserShareID = userShareID
+	newShare.Access = requestBody.Access
+
+	err = db.QueryRow(`
+        INSERT INTO shares (user_id, user_share_id, access)
+        VALUES ($1, $2, $3)
+        RETURNING id
+    `, newShare.UserID, newShare.UserShareID, newShare.Access).Scan(&newShare.ID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error creating share: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(newShare)
+}
+
+// DELETE /api/shares/{id} => delete a share if the JWT user is either user_id or user_share_id
+func deleteShareHandler(w http.ResponseWriter, r *http.Request) {
+	userID, err := getUserIDFromToken(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	shareIDStr := vars["id"]
+	shareID, err := strconv.Atoi(shareIDStr)
+	if err != nil {
+		http.Error(w, "Invalid share ID", http.StatusBadRequest)
+		return
+	}
+
+	// We only allow delete if the current user is user_id or user_share_id
+	result, err := db.Exec(`
+        DELETE FROM shares
+        WHERE id=$1
+          AND (user_id=$2 OR user_share_id=$2)
+    `, shareID, userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error deleting share: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "Share not found or you are not allowed to delete it", http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"message": "Share deleted successfully"})
 }
