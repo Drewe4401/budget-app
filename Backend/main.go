@@ -117,6 +117,7 @@ func main() {
 	r.HandleFunc("/api/users", createUserHandler).Methods("POST")
 	r.HandleFunc("/api/users/{id}", updateUserHandler).Methods("PUT")
 	r.HandleFunc("/api/users/{id}", deleteUserHandler).Methods("DELETE")
+	r.HandleFunc("/api/users", getUsersHandler).Methods("GET")
 
 	// Login
 	r.HandleFunc("/api/login", loginHandler).Methods("POST")
@@ -309,6 +310,41 @@ func isAdmin(r *http.Request) bool {
 		return false
 	}
 	return permissions == "admin"
+}
+
+// GET /api/users => return all users with ID, username, and permissions (admin-only)
+func getUsersHandler(w http.ResponseWriter, r *http.Request) {
+	if !isAdmin(r) {
+		http.Error(w, "Forbidden - Admins only", http.StatusForbidden)
+		return
+	}
+
+	rows, err := db.Query(`SELECT id, username, permissions FROM users`)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error fetching users: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	// Define a struct for the view (excluding the password)
+	type UserView struct {
+		ID          int    `json:"id"`
+		Username    string `json:"username"`
+		Permissions string `json:"permissions"`
+	}
+
+	var users []UserView
+	for rows.Next() {
+		var u UserView
+		if err := rows.Scan(&u.ID, &u.Username, &u.Permissions); err != nil {
+			http.Error(w, fmt.Sprintf("Error scanning user: %v", err), http.StatusInternalServerError)
+			return
+		}
+		users = append(users, u)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(users)
 }
 
 // --------------------------
