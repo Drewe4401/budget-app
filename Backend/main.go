@@ -66,6 +66,30 @@ type Share struct {
 }
 
 // --------------------------
+//      CORS Middleware
+// --------------------------
+
+// corsMiddleware adds the necessary headers to allow cross-origin requests.
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Allow any origin (or restrict to a specific one)
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// Allow specific methods
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		// Allow specific headers
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		// Handle preflight OPTIONS request
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// --------------------------
 //  Initialization
 // --------------------------
 
@@ -142,8 +166,11 @@ func main() {
 	// Serve static files (optional front-end)
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir("./public")))
 
+	// Wrap the router with the CORS middleware
+	handler := corsMiddleware(r)
+
 	log.Println("Server starting on port 8080...")
-	log.Fatal(http.ListenAndServe(":8080", r))
+	log.Fatal(http.ListenAndServe(":8080", handler))
 }
 
 // --------------------------
