@@ -1,6 +1,6 @@
-# Budget API
+# Budgify
 
-A simple budgeting API built with Go, PostgreSQL, and Docker. This project provides endpoints for managing users, budgets, charges, and shares with JWT-based authentication. It also includes a static file server for a frontend (if available).
+A simple budgeting app build using Go for backend api, postgres for database, and react as a frontend.
 
 ---
 
