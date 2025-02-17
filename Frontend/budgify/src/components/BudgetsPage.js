@@ -12,7 +12,8 @@ function BudgetsPage({ token }) {
         });
         if (response.ok) {
           const data = await response.json();
-          setBudgets(data);
+          // Ensure that data is an array; if it's null, set an empty array
+          setBudgets(data || []);
         } else {
           setError('Failed to fetch budgets');
         }
@@ -27,7 +28,7 @@ function BudgetsPage({ token }) {
   return (
     <div>
       <h2>Your Budgets</h2>
-      {error && <p style={{ color:'red' }}>{error}</p>}
+      {error && <p style={{ color: 'red' }}>{error}</p>}
       <ul>
         {budgets.map(budget => (
           <li key={budget.id}>

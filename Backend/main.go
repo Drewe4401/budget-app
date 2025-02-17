@@ -132,6 +132,11 @@ func main() {
 		log.Fatalf("Failed to create default admin: %v\n", err)
 	}
 
+	// Create default admin user if not exists
+	if err := createDefaultUsers(db); err != nil {
+		log.Fatalf("Failed to create default Users: %v\n", err)
+	}
+
 	// --------------------------
 	//         ROUTES
 	// --------------------------
@@ -259,6 +264,55 @@ func createDefaultAdmin(db *sql.DB) error {
 	} else {
 		log.Println("Admin user already exists, skipping creation.")
 	}
+	return nil
+}
+
+func createDefaultUsers(db *sql.DB) error {
+	// Check if user "alice" exists
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM users WHERE username=$1`, "alice").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("error checking for alice: %v", err)
+	}
+	if count == 0 {
+		hashedPass, err := hashPassword("alice") // Replace with desired password
+		if err != nil {
+			return fmt.Errorf("error hashing alice's password: %v", err)
+		}
+		_, err = db.Exec(`
+            INSERT INTO users (username, password, permissions)
+            VALUES ($1, $2, $3)
+        `, "alice", hashedPass, "user")
+		if err != nil {
+			return fmt.Errorf("error inserting alice: %v", err)
+		}
+		log.Println("Default user created: username=alice / password=alice (permissions=user)")
+	} else {
+		log.Println("User 'alice' already exists, skipping creation.")
+	}
+
+	// Check if user "bob" exists
+	err = db.QueryRow(`SELECT COUNT(*) FROM users WHERE username=$1`, "bob").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("error checking for bob: %v", err)
+	}
+	if count == 0 {
+		hashedPass, err := hashPassword("bob") // Replace with desired password
+		if err != nil {
+			return fmt.Errorf("error hashing bob's password: %v", err)
+		}
+		_, err = db.Exec(`
+            INSERT INTO users (username, password, permissions)
+            VALUES ($1, $2, $3)
+        `, "bob", hashedPass, "user")
+		if err != nil {
+			return fmt.Errorf("error inserting bob: %v", err)
+		}
+		log.Println("Default user created: username=bob / password=bob (permissions=user)")
+	} else {
+		log.Println("User 'bob' already exists, skipping creation.")
+	}
+
 	return nil
 }
 
