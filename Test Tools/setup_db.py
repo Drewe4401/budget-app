@@ -72,17 +72,17 @@ def insert_filler_data(cursor):
     
     # Insert sample budgets using subqueries to fetch the user_id by username.
     filler_budgets = """
-    INSERT INTO budgets (name, amount, description, period, user_id)
+    INSERT INTO budgets (name, amount, category, period, user_id)
     VALUES
-      ('Groceries', 500.00, 'Monthly grocery budget', 'monthly', (SELECT id FROM users WHERE username = 'alice')),
-      ('Rent', 1200.00, 'Monthly rent payment', 'monthly', (SELECT id FROM users WHERE username = 'alice')),
-      ('Vacation Fund', 2000.00, 'Saving for vacation', 'yearly', (SELECT id FROM users WHERE username = 'bob'))
+      ('Groceries', 500.00, 'grocery', 'monthly', (SELECT id FROM users WHERE username = 'alice')),
+      ('Rent', 1200.00, 'rent', 'monthly', (SELECT id FROM users WHERE username = 'alice')),
+      ('Vacation Fund', 2000.00, 'vacation', 'yearly', (SELECT id FROM users WHERE username = 'bob'))
     ON CONFLICT DO NOTHING;
     """
     
     # Insert sample charges using subqueries.
     filler_charges = """
-    INSERT INTO charges (name, amount, charge_type, periodical, user_id)
+    INSERT INTO charges (name, amount, category, periodical, user_id)
     VALUES
       ('Electricity Bill', 75.00, 'Utility', 'monthly', (SELECT id FROM users WHERE username = 'alice')),
       ('Water Bill', 30.00, 'Utility', 'monthly', (SELECT id FROM users WHERE username = 'alice')),

@@ -1,0 +1,185 @@
+/* Import Google Fonts */
+@import url('https://fonts.googleapis.com/css?family=Abel|Abril+Fatface|Alegreya|Arima+Madurai|Dancing+Script|Dosis|Merriweather|Oleo+Script|Overlock|PT+Serif|Pacifico|Playball|Playfair+Display|Share|Unica+One|Vibur');
+
+/* Login overlay container */
+.login-overlay {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  background-image: linear-gradient(to top, #a8edea 0%, #fed6e3 100%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  font-family: 'Abel', sans-serif;
+  opacity: 0.95;
+  padding: 10px; /* Ensure content isn’t cut off on very small screens */
+}
+
+/* Login form styles */
+.login-form {
+  width: 450px;
+  min-height: 500px;
+  border-radius: 5px;
+  margin: 2% auto;
+  box-shadow: 0 9px 50px hsla(20, 67%, 75%, 0.31);
+  padding: 2%;
+  background-image: linear-gradient(-225deg, #E3FDF5 50%, #FFE6FA 50%);
+}
+
+/* Inner container */
+.login-container {
+  display: flex;
+  justify-content: space-around;
+  flex-wrap: wrap;
+  margin: 0 auto;
+}
+
+/* Header styles */
+.login-header {
+  margin: 2% auto 10% auto;
+  text-align: center;
+}
+.login-title {
+  font-size: 250%;
+  font-family: 'Playfair Display', serif;
+  color: #3e403f;
+}
+.login-subtitle {
+  letter-spacing: 0.05em;
+}
+
+/* Error message styling */
+.login-error {
+  color: red;
+  text-align: center;
+}
+
+/* Fieldset styles */
+.login-fieldset {
+  width: 100%;
+  text-align: center;
+}
+
+/* Input icon container */
+.login-input-item {
+  background: #fff;
+  color: #333;
+  padding: 14.5px 0 15px 9px;
+  border-radius: 5px 0 0 5px;
+}
+
+/* Eye icon container for password visibility */
+.login-eye-container {
+  position: relative;
+  display: inline-block;
+}
+.login-eye {
+  background: #fff;
+  color: #333;
+  margin: 5.9px 0 0 0;
+  margin-left: -20px;
+  padding: 15px 9px 19px 0;
+  border-radius: 0 5px 5px 0;
+  cursor: pointer;
+}
+
+/* Input field styles */
+.login-input {
+  width: 240px;
+  height: 50px;
+  margin-top: 2%;
+  padding: 15px;
+  font-size: 16px;
+  font-family: 'Abel', sans-serif;
+  color: #5E6472;
+  outline: none;
+  border: none;
+  border-radius: 0 5px 5px 0;
+  transition: 0.2s linear;
+}
+#login-txt-input {
+  width: 250px;
+}
+.login-input:focus {
+  transform: translateX(-2px);
+  border-radius: 5px;
+}
+
+/* Button styles */
+.login-button {
+  display: inline-block;
+  color: #252537;
+  width: 280px;
+  height: 50px;
+  padding: 0 20px;
+  background: #fff;
+  border-radius: 5px;
+  outline: none;
+  border: none;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.2s linear;
+  margin: 7% auto;
+  letter-spacing: 0.05em;
+}
+
+/* Specific button variations */
+.login-frgt-pass {
+  background: transparent;
+}
+.login-sign-up {
+  background: #B8F2E6;
+}
+
+/* Button hover effects */
+.login-button:hover {
+  transform: translateY(3px);
+  box-shadow: none;
+  animation: loginAni9 0.4s ease-in-out infinite alternate;
+}
+@keyframes loginAni9 {
+  0% {
+    transform: translateY(3px);
+  }
+  100% {
+    transform: translateY(5px);
+  }
+}
+
+/* Responsive Styles for iPhone and smaller devices */
+@media only screen and (max-width: 480px) {
+  .login-form {
+    width: 90%;             /* Use a percentage of the viewport */
+    min-height: auto;       /* Let content determine height */
+    padding: 20px;          /* Increase padding for better spacing */
+  }
+  
+  .login-input {
+    width: calc(100% - 40px); /* Full width minus padding and icon */
+    font-size: 16px;
+  }
+  
+  #login-txt-input {
+    width: calc(100% - 40px);
+  }
+  
+  .login-button {
+    width: 100%;            /* Full width button */
+    height: 50px;
+    font-size: 18px;        /* Slightly larger text for readability */
+    margin-top: 20px;
+  }
+  
+  .login-input-item,
+  .login-eye {
+    padding: 12px 8px;      /* Adjust icon padding for smaller screens */
+  }
+  
+  .login-header {
+    margin: 5% auto 5% auto;
+  }
+  
+  .login-title {
+    font-size: 200%;        /* Slightly smaller title on small screens */
+  }
+}

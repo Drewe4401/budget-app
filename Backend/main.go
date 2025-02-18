@@ -38,12 +38,12 @@ type User struct {
 
 // Budget: belongs to a user
 type Budget struct {
-	ID          int     `json:"id"`
-	Name        string  `json:"name"`
-	Amount      float64 `json:"amount"`
-	Description string  `json:"description"`
-	Period      string  `json:"period"`
-	UserID      int     `json:"user_id"`
+	ID       int     `json:"id"`
+	Name     string  `json:"name"`
+	Amount   float64 `json:"amount"`
+	Category string  `json:"category"`
+	Period   string  `json:"period"`
+	UserID   int     `json:"user_id"`
 }
 
 // Charge: belongs to a user
@@ -51,7 +51,7 @@ type Charge struct {
 	ID         int     `json:"id"`
 	Name       string  `json:"name"`
 	Amount     float64 `json:"amount"`
-	ChargeType string  `json:"charge_type"`
+	Category   string  `json:"category"`
 	Periodical string  `json:"periodical"`
 	UserID     int     `json:"user_id"`
 	CreatedAt  string  `json:"created_at"`
@@ -196,7 +196,7 @@ func initDB(db *sql.DB) error {
         id SERIAL PRIMARY KEY,
         name VARCHAR(100) NOT NULL,
         amount NUMERIC(10,2) NOT NULL,
-        description TEXT,
+        category TEXT,
         period VARCHAR(20),
         user_id INTEGER NOT NULL,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -207,7 +207,7 @@ func initDB(db *sql.DB) error {
         id SERIAL PRIMARY KEY,
         name VARCHAR(100) NOT NULL,
         amount NUMERIC(10,2) NOT NULL,
-        charge_type VARCHAR(50) NOT NULL,
+        category TEXT NOT NULL, 
         periodical VARCHAR(20),
         user_id INTEGER NOT NULL,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -601,7 +601,7 @@ func getBudgetsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := db.Query(`
-		SELECT id, name, amount, description, period, user_id
+		SELECT id, name, amount, category, period, user_id
 		FROM budgets
 		WHERE user_id=$1
 	`, userID)
@@ -614,7 +614,7 @@ func getBudgetsHandler(w http.ResponseWriter, r *http.Request) {
 	var budgets []Budget
 	for rows.Next() {
 		var b Budget
-		if err := rows.Scan(&b.ID, &b.Name, &b.Amount, &b.Description, &b.Period, &b.UserID); err != nil {
+		if err := rows.Scan(&b.ID, &b.Name, &b.Amount, &b.Category, &b.Period, &b.UserID); err != nil {
 			http.Error(w, fmt.Sprintf("Error scanning budget: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -643,10 +643,11 @@ func createBudgetHandler(w http.ResponseWriter, r *http.Request) {
 	b.UserID = userID
 
 	err = db.QueryRow(`
-		INSERT INTO budgets (name, amount, description, period, user_id)
+		INSERT INTO budgets (name, amount, category, period, user_id)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id
-	`, b.Name, b.Amount, b.Description, b.Period, b.UserID).Scan(&b.ID)
+
+	`, b.Name, b.Amount, b.Category, b.Period, b.UserID).Scan(&b.ID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error inserting budget: %v", err), http.StatusInternalServerError)
 		return
@@ -681,10 +682,11 @@ func updateBudgetHandler(w http.ResponseWriter, r *http.Request) {
 	// Only update if user_id matches the JWT user
 	result, err := db.Exec(`
 		UPDATE budgets
-		SET name=$1, amount=$2, description=$3, period=$4
+		SET name=$1, amount=$2, category=$3, period=$4
 		WHERE id=$5 AND user_id=$6
+
 	`,
-		b.Name, b.Amount, b.Description, b.Period, budgetID, userID)
+		b.Name, b.Amount, b.Category, b.Period, budgetID, userID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error updating budget: %v", err), http.StatusInternalServerError)
 		return
@@ -746,9 +748,10 @@ func getChargesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := db.Query(`
-        SELECT id, name, amount, charge_type, periodical, user_id, created_at
-        FROM charges
-        WHERE user_id=$1
+		SELECT id, name, amount, category, periodical, user_id, created_at
+		FROM charges
+		WHERE user_id=$1
+
     `, userID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error querying charges: %v", err), http.StatusInternalServerError)
@@ -759,7 +762,7 @@ func getChargesHandler(w http.ResponseWriter, r *http.Request) {
 	var charges []Charge
 	for rows.Next() {
 		var c Charge
-		if err := rows.Scan(&c.ID, &c.Name, &c.Amount, &c.ChargeType, &c.Periodical, &c.UserID, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Amount, &c.Category, &c.Periodical, &c.UserID, &c.CreatedAt); err != nil {
 			http.Error(w, fmt.Sprintf("Error scanning charge: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -788,10 +791,10 @@ func createChargeHandler(w http.ResponseWriter, r *http.Request) {
 	c.UserID = userID
 
 	err = db.QueryRow(`
-        INSERT INTO charges (name, amount, charge_type, periodical, user_id)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, created_at
-    `, c.Name, c.Amount, c.ChargeType, c.Periodical, c.UserID).Scan(&c.ID, &c.CreatedAt)
+		INSERT INTO charges (name, amount, category, periodical, user_id)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, created_at
+    `, c.Name, c.Amount, c.Category, c.Periodical, c.UserID).Scan(&c.ID, &c.CreatedAt)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error inserting charge: %v", err), http.StatusInternalServerError)
 		return
@@ -825,10 +828,10 @@ func updateChargeHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Only update if charge belongs to user
 	result, err := db.Exec(`
-        UPDATE charges
-        SET name=$1, amount=$2, charge_type=$3, periodical=$4
-        WHERE id=$5 AND user_id=$6
-    `, c.Name, c.Amount, c.ChargeType, c.Periodical, chargeID, userID)
+		UPDATE charges
+		SET name=$1, amount=$2, category=$3, periodical=$4
+		WHERE id=$5 AND user_id=$6
+    `, c.Name, c.Amount, c.Category, c.Periodical, chargeID, userID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error updating charge: %v", err), http.StatusInternalServerError)
 		return
